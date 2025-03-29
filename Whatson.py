@@ -1,204 +1,15 @@
+# whatson.py
 import random
-from jellyfin_apiclient_python import JellyfinClient
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
-import requests
-import io
-import webbrowser
 import ttkbootstrap as tb
+import os
 
-# Jellyfin setup
-client = JellyfinClient()
-client.config.app('Whatson', '1.0', 'MomDevice', 'MomDeviceId')
-client.config.data['auth.ssl'] = False
-JELLYFIN_URL = 'http://localhost:8096'
-
-print("Connecting to server:", JELLYFIN_URL)
-client.auth.connect_to_server({'address': JELLYFIN_URL})
-
-print("Attempting login...")
-credentials = client.auth.login(JELLYFIN_URL, 'test', 'test')
-if not credentials or 'User' not in credentials:
-    raise Exception("Failed to authenticate. Check server URL, username, and password.")
-USER_ID = credentials['User']['Id']
-print("Logged in as user:", USER_ID)
-
-def get_shows():
-    print("Fetching shows for user:", USER_ID)
-    response = client.jellyfin.user_items(params={
-        'Recursive': True,
-        'IncludeItemTypes': 'Series,Movie',
-        'Fields': 'Overview,PrimaryImageTag,UserData,People,Images,ImageTags'
-    })
-    items = response['Items']
-    print(f"Found {len(items)} shows and movies")
-    for item in items[:3]:
-        print(f"Show: {item.get('Name', 'Unknown')}, People: {item.get('People', 'No People data')}")
-    return items
-
-def get_image(item, width=480, height=270, image_type='Thumb'):
-    item_id = item['Id']
-    image_tags = item.get('ImageTags', {}).get(image_type, '')
-    if image_tags:
-        url = f"{JELLYFIN_URL}/Items/{item_id}/Images/{image_type}?tag={image_tags}&maxWidth={width}&maxHeight={height}"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            img = Image.open(io.BytesIO(response.content))
-            # Get the original aspect ratio
-            orig_width, orig_height = img.size
-            aspect_ratio = orig_width / orig_height
-            # Resize to fit the specified height (270) while maintaining aspect ratio
-            new_height = height
-            new_width = int(new_height * aspect_ratio)
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            return ImageTk.PhotoImage(img)
-        except (requests.RequestException, IOError):
-            print(f"Failed to load {image_type} image for item {item_id}")
-    return ImageTk.PhotoImage(Image.new('RGB', (width, height), color='#000000'))
-
-def get_description(item):
-    item_id = item['Id']
-    item_type = item.get('Type')
-    series_name = item.get('Name', 'Unknown Series')
-    print(f"Processing {series_name} (ID: {item_id})")
-
-    if item_type == 'Series':
-        try:
-            resume_data = client.jellyfin.user_items(params={
-                'ParentId': item_id,
-                'Recursive': True,
-                'IncludeItemTypes': 'Episode',
-                'SortBy': 'ParentIndexNumber,IndexNumber',
-                'SortOrder': 'Ascending',
-                'Fields': 'Overview,ParentIndexNumber,IndexNumber,UserData'
-            })
-            episodes = resume_data.get('Items', [])
-            if not episodes:
-                print(f"No episodes found for {series_name}")
-                return series_name, None, item.get('Overview', f"No episodes found for {series_name}")
-        except Exception as e:
-            print(f"Error fetching episodes for {series_name}: {e}")
-            return series_name, None, item.get('Overview', f"Error fetching episodes for {series_name}")
-
-        # Determine if the series has multiple seasons
-        season_numbers = set(episode.get('ParentIndexNumber', 0) for episode in episodes)
-        has_multiple_seasons = len(season_numbers) > 1
-
-        # First, check for partially watched episodes
-        for episode in episodes:
-            ep_user_data = episode.get('UserData', {})
-            season_num = episode.get('ParentIndexNumber')
-            episode_num = episode.get('IndexNumber')
-            ep_name = episode.get('Name', 'Untitled Episode')
-            ep_overview = episode.get('Overview', 'No description available')
-
-            print(f"Episode {ep_name} (S{season_num if season_num is not None else '??'}E{episode_num if episode_num is not None else '??'}): {ep_user_data}")
-
-            if ep_user_data.get('PlaybackPositionTicks', 0) > 0:
-                # Build the episode title dynamically based on available data
-                title_parts = []
-                if has_multiple_seasons and season_num is not None:
-                    if episode_num is not None:
-                        title_parts.append(f"{season_num}.{str(episode_num).zfill(2)}")
-                    else:
-                        title_parts.append(f"{season_num}")
-                elif episode_num is not None:
-                    title_parts.append(f"{str(episode_num).zfill(2)}")
-                title_parts.append(ep_name)
-                episode_title = " ".join(title_parts)
-                return series_name, episode_title, ep_overview
-
-        # Find the last played episode
-        last_played_index = -1
-        for i, episode in enumerate(episodes):
-            ep_user_data = episode.get('UserData', {})
-            if ep_user_data.get('Played', False):
-                last_played_index = i
-
-        # Determine the next episode to show (either after the last played or the first episode)
-        next_episode_index = last_played_index + 1 if last_played_index >= 0 else 0
-        if next_episode_index < len(episodes):
-            next_episode = episodes[next_episode_index]
-            season_num = next_episode.get('ParentIndexNumber')
-            episode_num = next_episode.get('IndexNumber')
-            ep_name = next_episode.get('Name', 'Untitled Episode')
-            ep_overview = next_episode.get('Overview', 'No description available')
-            # Build the episode title dynamically based on available data
-            title_parts = []
-            if has_multiple_seasons and season_num is not None:
-                if episode_num is not None:
-                    title_parts.append(f"{season_num}.{str(episode_num).zfill(2)}")
-                else:
-                    title_parts.append(f"{season_num}")
-            elif episode_num is not None:
-                title_parts.append(f"{str(episode_num).zfill(2)}")
-            title_parts.append(ep_name)
-            episode_title = " ".join(title_parts)
-            return series_name, episode_title, ep_overview
-        else:
-            # If there are no more episodes, loop back to the first episode
-            next_episode = episodes[0]
-            season_num = next_episode.get('ParentIndexNumber')
-            episode_num = next_episode.get('IndexNumber')
-            ep_name = next_episode.get('Name', 'Untitled Episode')
-            ep_overview = next_episode.get('Overview', 'No description available')
-            # Build the episode title dynamically based on available data
-            title_parts = []
-            if has_multiple_seasons and season_num is not None:
-                if episode_num is not None:
-                    title_parts.append(f"{season_num}.{str(episode_num).zfill(2)}")
-                else:
-                    title_parts.append(f"{season_num}")
-            elif episode_num is not None:
-                title_parts.append(f"{str(episode_num).zfill(2)}")
-            title_parts.append(ep_name)
-            episode_title = " ".join(title_parts)
-            return series_name, episode_title, ep_overview
-
-    elif item_type == 'Movie':
-        user_data = item.get('UserData', {})
-        if user_data.get('PlaybackPositionTicks', 0) > 0:
-            return item.get('Name', 'Unknown Movie'), f"Resume:", item.get('Overview', 'No description available')
-        return item.get('Name', 'Unknown Movie'), None, item.get('Overview', 'No description available')
-
-    return series_name, None, item.get('Overview', 'No description available')
-
-def truncate_description(description):
-    """Truncate the description to 650 characters if it exceeds the limit."""
-    if len(description) > 700:
-        return description[:697] + "..."
-    return description
-
-def get_font_size(description):
-    desc_length = len(description)
-    if desc_length > 500:
-        return ('Helvetica', 14), True  # Smallest font, reduce title
-    elif desc_length > 420:
-        return ('Helvetica', 15), True  # Slightly smaller font, reduce title
-    elif desc_length > 300:
-        return ('Helvetica', 17), False  # Medium font, normal title
-    else:
-        return ('Helvetica', 20), False  # Largest font, normal title
-
-def launch_show(item_id):
-    play_url = f"{JELLYFIN_URL}/web/index.html#!/video?id={item_id}&serverId={credentials['ServerId']}&play=true"
-    webbrowser.open(play_url)
-
-def open_jellyfin_ui():
-    webbrowser.open(f"{JELLYFIN_URL}/web/index.html")
+from jellyfin_utils import get_shows, get_image, launch_show, open_jellyfin_ui, get_description, get_cast_image
+from ui_utils import truncate_description, get_font_size
 
 class WhatsonUI:
-    def filter_shows(self, *args):
-        filter_text = self.filter_var.get().lower()
-        self.filtered_shows = [
-            show for show in self.shows
-            if filter_text in show['Name'].lower() or
-               filter_text in (show.get('Genres', []) and ','.join(show['Genres']).lower())
-        ]
-        self.load_random_shows()
-
     def __init__(self, root):
         self.root = root
         self.root.title("Whatson")
@@ -215,8 +26,36 @@ class WhatsonUI:
         self.shows = get_shows()
         self.filtered_shows = self.shows[:]
 
+        self.color_scheme = {
+            "bg": "#121212",
+            "series": "#FFA500",  # Option 3: Orange
+            "episode": "#ADFF2F",  # Option 3: Lime Green
+            "desc": "#FFFFFF"
+        }
+        # Other color combos to try (uncomment to use):
+        # Option 1: self.color_scheme["series"] = "#FFD700"; self.color_scheme["episode"] = "#FF6347"  # Gold, Tomato
+        # Option 2: self.color_scheme["series"] = "#87CEEB"; self.color_scheme["episode"] = "#FFDAB9"  # Sky Blue, Peach Puff
+        # Option 4: self.color_scheme["series"] = "#FF69B4"; self.color_scheme["episode"] = "#98FB98"  # Hot Pink, Pale Green
+        # Option 5: self.color_scheme["series"] = "#F08080"; self.color_scheme["episode"] = "#E0FFFF"  # Light Coral, Light Cyan
+
+        self.channel_logos = []
+        channels_folder = "Channels"
+        if os.path.exists(channels_folder):
+            for file_name in os.listdir(channels_folder):
+                if file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                    try:
+                        img_path = os.path.join(channels_folder, file_name)
+                        img = Image.open(img_path).resize((200, 260), Image.Resampling.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        self.channel_logos.append(photo)
+                    except Exception as e:
+                        print(f"Error loading channel logo {file_name}: {e}")
+        if not self.channel_logos:
+            print("No channel logos found in Channels folder. Using placeholder text.")
+            self.channel_logos = None
+
         top_frame = ttk.Frame(self.root, padding=10)
-        top_frame.pack(fill='x', pady=10)
+        top_frame.pack(fill='x', pady=5)
 
         try:
             logo_img = Image.open("path/to/logo.png")
@@ -244,10 +83,19 @@ class WhatsonUI:
         self.show_frames = []
         for i in range(5):
             frame = ttk.Frame(main_frame, height=270, padding=5, style="DarkBlue.TFrame")
-            frame.pack(fill='x', pady=5)
+            frame.pack(fill='x', pady=2)
             frame.pack_propagate(False)
             self.show_frames.append(frame)
 
+        self.load_random_shows()
+
+    def filter_shows(self, *args):
+        filter_text = self.filter_var.get().lower()
+        self.filtered_shows = [
+            show for show in self.shows
+            if filter_text in show['Name'].lower() or
+               filter_text in (show.get('Genres', []) and ','.join(show['Genres']).lower())
+        ]
         self.load_random_shows()
 
     def clear_frames(self):
@@ -257,105 +105,150 @@ class WhatsonUI:
 
     def load_random_shows(self):
         self.clear_frames()
-        # Filter shows that have both a title (Name) and cast (People)
         valid_shows = [
             show for show in self.filtered_shows
-            if show.get('Name') and show.get('Name').strip()  # Non-empty title
-            and show.get('People') and len(show.get('People')) > 0  # Non-empty cast list
+            if show.get('Name') and show.get('Name').strip()
+            and show.get('People') and len(show.get('People')) > 0
         ]
-        # Select up to 5 shows from the valid ones
         selected_shows = random.sample(valid_shows, min(5, len(valid_shows)))
         self.current_shows = selected_shows
 
-        for frame, show in zip(self.show_frames, self.current_shows):
-            channel_logo = ttk.Label(frame, text="[Channel Logo]", width=15, anchor='center', 
-                                    foreground='#ffffff', style="DarkBlue.TLabel")
-            channel_logo.pack(side=tk.LEFT, padx=2)
+        scheme = self.color_scheme
 
-            # Thumbnail with aspect ratio preserved, height=270
-            img = get_image(show, width=480, height=270, image_type='Thumb')
+        if self.channel_logos:
+            num_logos = min(len(self.channel_logos), 5)
+            selected_logos = random.sample(self.channel_logos, num_logos)
+            selected_logos.extend([None] * (5 - num_logos))
+        else:
+            selected_logos = [None] * 5
+
+        for frame, show, logo in zip(self.show_frames, self.current_shows, selected_logos):
+            if logo:
+                channel_logo = ttk.Label(frame, image=logo)
+                channel_logo.image = logo
+                channel_logo.pack(side=tk.LEFT, padx=2)
+            else:
+                channel_logo = ttk.Label(frame, text="[Channel Logo]", width=15, anchor='center', 
+                                        foreground=scheme["desc"], style="DarkBlue.TLabel")
+                channel_logo.pack(side=tk.LEFT, padx=2)
+
+            img = get_image(show, width=462, height=260, image_type='Thumb')
             img_label = ttk.Label(frame, image=img)
             img_label.image = img
-            img_label.pack(side=tk.LEFT)  # Removed padx=4
+            img_label.pack(side=tk.LEFT, padx=2)
 
-            description_frame = ttk.Frame(frame, width=772)
-            description_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=4)
+            description_frame = ttk.Frame(frame, width=772, style="DarkBlue.TFrame")
+            description_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=2)
             description_frame.pack_propagate(False)
 
-            # Get the show title, episode title, and description
             show_title, episode_title, description = get_description(show)
             description = truncate_description(description)
-            font, reduce_title = get_font_size(description)
 
-            # Create a frame for the show title (centered)
-            title_frame = ttk.Frame(description_frame)
-            title_frame.pack(side=tk.TOP, fill='x', pady=(5, 5))
+            series_font_size, desc_font_size, reduce_title = get_font_size(description, show_title, episode_title)
 
-            # Show title (centered)
-            title_font = ('Roboto', 20, 'bold') if reduce_title else ('Roboto', 28, 'bold')
-            show_title_label = ttk.Label(
-                title_frame,
-                text=show_title,
-                font=title_font,
-                foreground='#A8D5E2',
-                anchor='center'
-            )
-            show_title_label.pack(side=tk.TOP, fill='x', expand=True)
+            episode_font_family = "Arial"
+            episode_font_color = scheme["episode"]
+            desc_font_family = "Helvetica"
+            desc_font_color = scheme["desc"]
 
-            # Create a separate frame for the episode title (movable)
-            if episode_title:
-                episode_title_frame = ttk.Frame(description_frame)
-                episode_title_frame.pack(side=tk.TOP, fill='x')
-
-                episode_title_label = ttk.Label(
-                    episode_title_frame,
-                    text=episode_title,
-                    font=('Helvetica', 16, 'bold'),
-                    foreground='#ffffff',
-                    anchor='w'
-                )
-                episode_title_label.pack(side=tk.LEFT)
-
-            # Display the description
-            desc_label = ttk.Label(
+            desc_text = tk.Text(
                 description_frame,
-                text=description,
-                wraplength=1265,
-                font=font,
+                wrap='word',
                 foreground='#ffffff',
-                justify='left',
-                anchor='w'
+                background=scheme["bg"],
+                borderwidth=0,
+                highlightthickness=0,
+                height=10
             )
-            desc_label.pack(side=tk.TOP, anchor='w', padx=(15, 0), fill='both', expand=True)
+            desc_text.pack(expand=True, fill='both')
 
-            cast_frame = ttk.Frame(frame, width=750)
-            cast_frame.pack(side=tk.LEFT, fill='y', padx=2)
+            desc_text.tag_configure("series_name", 
+                                    font=(desc_font_family, desc_font_size, "underline"),
+                                    foreground=scheme["series"],
+                                    spacing1=5,
+                                    spacing3=0)
+            desc_text.tag_configure("spacer", 
+                                    font=(desc_font_family, desc_font_size),
+                                    foreground=scheme["series"],
+                                    spacing1=0,
+                                    spacing3=0)
+            desc_text.tag_configure("episode_prefix", 
+                                    font=(episode_font_family, desc_font_size),
+                                    foreground=episode_font_color,
+                                    spacing1=0,
+                                    spacing3=0)
+            desc_text.tag_configure("episode_name", 
+                                    font=(episode_font_family, desc_font_size, "italic"),
+                                    foreground=episode_font_color,
+                                    spacing1=0,
+                                    spacing3=0)
+            desc_text.tag_configure("description", 
+                                    font=(desc_font_family, desc_font_size),
+                                    foreground=desc_font_color,
+                                    spacing1=0,
+                                    spacing3=2)
+            desc_text.tag_configure("period", 
+                                    font=(episode_font_family, desc_font_size),
+                                    foreground="#ADFF2F",
+                                    spacing1=0,
+                                    spacing3=0)
+
+            if episode_title:
+                parts = episode_title.split(" Episode ", 1)  # Split on one space before "Episode"
+                if len(parts) == 2:
+                    series_part = parts[0]  # Already uppercase, e.g., "NCIS: NEW ORLEANS"
+                    episode_part = parts[1]  # "1.01: Musician Heal Thyself"
+                    episode_subparts = episode_part.split(": ", 1)
+                    if len(episode_subparts) == 2:
+                        episode_prefix = f"Episode {episode_subparts[0]}"  # "Episode 1.01"
+                        episode_name = episode_subparts[1]  # "Musician Heal Thyself"
+                    else:
+                        episode_prefix = f"Episode {episode_part}"
+                        episode_name = ""
+                    desc_text.insert(tk.END, series_part, "series_name")
+                    desc_text.insert(tk.END, " ", "spacer")
+                    desc_text.insert(tk.END, episode_prefix, "episode_prefix")
+                    if episode_name:
+                        desc_text.insert(tk.END, ": ", "episode_prefix")
+                        desc_text.insert(tk.END, episode_name, "episode_name")
+                    desc_text.insert(tk.END, ".", "period")
+                    desc_text.insert(tk.END, " ", "description")
+                    desc_text.insert(tk.END, description, "description")
+                else:
+                    desc_text.insert(tk.END, show_title.upper(), "series_name")
+                    desc_text.insert(tk.END, " ", "spacer")
+                    desc_text.insert(tk.END, episode_title, "episode_prefix")
+                    desc_text.insert(tk.END, ".", "period")
+                    desc_text.insert(tk.END, " ", "description")
+                    desc_text.insert(tk.END, description, "description")
+            else:
+                desc_text.insert(tk.END, show_title.upper(), "series_name")
+                desc_text.insert(tk.END, " ", "spacer")  # Single space, no hyphen
+                desc_part = description
+                if description.startswith(show_title.upper() + " "):
+                    desc_part = description[len(show_title.upper()) + 1:]
+                desc_text.insert(tk.END, desc_part, "description")
+
+            desc_text.tag_configure("center", justify='left')
+            desc_text.tag_add("center", "1.0", "end")
+            desc_text.configure(state='disabled')
+
+            # Rest of the code (cast_frame, poster_frame) remains unchanged...
+
+            cast_frame = ttk.Frame(frame, width=700, style="DarkBlue.TFrame")
+            cast_frame.pack(side=tk.LEFT, fill='y', padx=0)
             cast_frame.pack_propagate(False)
             cast_container = ttk.Frame(cast_frame)
-            cast_container.pack(side=tk.TOP, pady=5)
+            cast_container.pack(side=tk.TOP, pady=0)
 
             people = show.get('People', [])
             for person in people[:5]:
-                person_id = person.get('Id')
-                if person_id and person.get('PrimaryImageTag'):
-                    cast_img_url = f"{JELLYFIN_URL}/Items/{person_id}/Images/Primary?tag={person['PrimaryImageTag']}&maxWidth=128&maxHeight=190"
-                    try:
-                        response = requests.get(cast_img_url)
-                        response.raise_for_status()
-                        cast_img = Image.open(io.BytesIO(response.content))
-                        cast_photo = ImageTk.PhotoImage(cast_img)
-                    except (requests.RequestException, IOError):
-                        cast_photo = ImageTk.PhotoImage(Image.new('RGB', (128, 190), color='#000000'))
-                else:
-                    cast_photo = ImageTk.PhotoImage(Image.new('RGB', (128, 190), color='#000000'))
-
+                cast_photo = get_cast_image(person, width=132, height=200)
                 cast_member_frame = ttk.Frame(cast_container)
                 cast_member_frame.pack(side=tk.LEFT, padx=2)
-
                 cast_label = ttk.Label(cast_member_frame, image=cast_photo)
                 cast_label.image = cast_photo
                 cast_label.pack(side=tk.TOP, pady=(0, 0))
-
                 name = person.get('Name', 'Unknown')
                 parts = name.split()
                 if len(parts) > 1:
@@ -364,45 +257,38 @@ class WhatsonUI:
                 else:
                     first_line = name
                     second_line = ""
-
                 if len(first_line) > 10:
                     first_line = first_line[:9] + "."
                 if len(second_line) > 10:
                     second_line = second_line[:9] + "."
-
                 formatted_name = f"{first_line}\n{second_line}"
-
                 name_label = ttk.Label(
                     cast_member_frame,
                     text=formatted_name,
                     font=('Monospace', 9),
-                    foreground='#ffffff',
+                    foreground=scheme["desc"],
                     justify='center',
                     anchor='center',
-                    compound='text'
+                    compound='text',
+                    style="DarkBlue.TLabel"
                 )
                 name_label.pack(side=tk.TOP, pady=(0, 0))
 
-                style = ttk.Style()
-                style.configure("Tight.TLabel", font=('Monospace', 9), foreground='#ffffff', anchor='center', justify='center')
-                name_label.configure(style="Tight.TLabel")
-
-            poster_frame = ttk.Frame(frame, width=180)
-            poster_frame.pack(side=tk.RIGHT, fill='y', padx=4)
+            poster_frame = ttk.Frame(frame, width=180, style="DarkBlue.TFrame")
+            poster_frame.pack(side=tk.RIGHT, fill='y', padx=2)
             poster_frame.pack_propagate(False)
-
             poster_container = ttk.Frame(poster_frame)
             poster_container.pack(expand=True)
-
             poster_img = get_image(show, width=180, height=270, image_type='Primary')
             poster_label = ttk.Label(poster_container, image=poster_img)
             poster_label.image = poster_img
             poster_label.pack()
             poster_label.bind("<Button-1>", lambda e, id=show['Id']: launch_show(id))
+
 if __name__ == "__main__":
     root = tb.Window(themename="cyborg")
     style = ttk.Style()
-    style.configure("DarkBlue.TFrame", background="#1a2b4c")
-    style.configure("DarkBlue.TLabel", background="#1a2b4c", foreground="#ffffff")
+    style.configure("DarkBlue.TFrame", background="#0A1A2F")
+    style.configure("DarkBlue.TLabel", background="#0A1A2F", foreground="#ffffff")
     app = WhatsonUI(root)
     root.mainloop()
