@@ -16,7 +16,7 @@ print("Connecting to server:", JELLYFIN_URL)
 client.auth.connect_to_server({'address': JELLYFIN_URL})
 
 print("Attempting login...")
-credentials = client.auth.login(JELLYFIN_URL, 'test', 'test')
+credentials = client.auth.login(JELLYFIN_URL, 'Vicki', 'mom')
 if not credentials or 'User' not in credentials:
     raise Exception("Failed to authenticate. Check server URL, username, and password.")
 USER_ID = credentials['User']['Id']
