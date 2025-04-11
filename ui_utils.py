@@ -22,11 +22,15 @@ def get_font_size(description, series_title, episode_title=None):
 
     # Adjust based on description length
     if desc_length > 550:
-        desc_font_size = 15
-    elif desc_length > 450:
+        desc_font_size = 14
+    elif desc_length > 500:
         desc_font_size = 17
+    elif desc_length > 450:
+        desc_font_size = 16
     elif desc_length > 400:
-        desc_font_size = 18
+        desc_font_size = 17
+    elif desc_length > 300:  # Adjusted font size for this range
+        desc_font_size = 18  # Reduced from 16 to 14 to fit longer descriptions
     else:
         desc_font_size = 19
     

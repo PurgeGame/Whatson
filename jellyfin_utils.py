@@ -54,7 +54,7 @@ def get_image(item, width=462, height=260, image_type='Thumb'):
             print(f"Failed to load {image_type} image for item {item_id}")
     return ImageTk.PhotoImage(Image.new('RGB', (width, height), color='#000000'))
 
-def get_cast_image(person, width=128, height=190):
+def get_cast_image(person, width=133, height=190):
     person_id = person.get('Id')
     if person_id and person.get('PrimaryImageTag'):
         cast_img_url = f"{JELLYFIN_URL}/Items/{person_id}/Images/Primary?tag={person['PrimaryImageTag']}&maxWidth={width}&maxHeight={height}"
