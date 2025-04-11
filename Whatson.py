@@ -13,15 +13,22 @@ class WhatsonUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Whatson")
-        self.root.geometry("1920x900")
+
+        # Set window dimensions directly
+        original_width = 1920
+        original_height = 600
+
+        self.root.geometry(f"{original_width}x{original_height}")
         self.root.configure(bg='#121212')
 
+        # Maximize the window on the primary monitor (Linux-compatible method)
+        self.root.attributes('-zoomed', True)
         self.root.update_idletasks()
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        x = (screen_width // 2) - (1920 // 2)
-        y = (screen_height // 2) - (900 // 2)
-        self.root.geometry(f"1920x900+{x}+{y}")
+        x = 0
+        y = 0
+        self.root.geometry(f"+{x}+{y}")
 
         self.shows = get_shows()
         self.filtered_shows = self.shows[:]
@@ -32,11 +39,6 @@ class WhatsonUI:
             "episode": "#ADFF2F",  # Option 3: Lime Green
             "desc": "#FFFFFF"
         }
-        # Other color combos to try (uncomment to use):
-        # Option 1: self.color_scheme["series"] = "#FFD700"; self.color_scheme["episode"] = "#FF6347"  # Gold, Tomato
-        # Option 2: self.color_scheme["series"] = "#87CEEB"; self.color_scheme["episode"] = "#FFDAB9"  # Sky Blue, Peach Puff
-        # Option 4: self.color_scheme["series"] = "#FF69B4"; self.color_scheme["episode"] = "#98FB98"  # Hot Pink, Pale Green
-        # Option 5: self.color_scheme["series"] = "#F08080"; self.color_scheme["episode"] = "#E0FFFF"  # Light Coral, Light Cyan
 
         self.channel_logos = []
         channels_folder = "Channels"
@@ -45,7 +47,13 @@ class WhatsonUI:
                 if file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
                     try:
                         img_path = os.path.join(channels_folder, file_name)
-                        img = Image.open(img_path).resize((200, 260), Image.Resampling.LANCZOS)
+                        row_height = 180
+                        original_logo_width = 200
+                        original_logo_height = 260
+                        logo_height = row_height
+                        aspect_ratio = original_logo_width / original_logo_height
+                        logo_width = int(logo_height * aspect_ratio)  # 180 * (200/260) ≈ 138
+                        img = Image.open(img_path).resize((logo_width, logo_height), Image.Resampling.LANCZOS)
                         photo = ImageTk.PhotoImage(img)
                         self.channel_logos.append(photo)
                     except Exception as e:
@@ -54,35 +62,33 @@ class WhatsonUI:
             print("No channel logos found in Channels folder. Using placeholder text.")
             self.channel_logos = None
 
-        top_frame = ttk.Frame(self.root, padding=10)
+        top_frame = ttk.Frame(self.root, padding=5)
         top_frame.pack(fill='x', pady=5)
 
         try:
             logo_img = Image.open("path/to/logo.png")
-            logo_img = logo_img.resize((50, 50), Image.Resampling.LANCZOS)
+            logo_img = logo_img.resize((40, 40), Image.Resampling.LANCZOS)
             self.logo = ImageTk.PhotoImage(logo_img)
             ttk.Label(top_frame, image=self.logo).pack(side=tk.LEFT, padx=10)
         except:
             ttk.Label(top_frame, text="[Logo]", font=('Helvetica', 14), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
 
-        ttk.Label(top_frame, text="Whatson", font=('Helvetica', 28, 'bold'), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
+        ttk.Label(top_frame, text="Whatson", font=('Helvetica', 16, 'bold'), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
 
         search_frame = ttk.Frame(top_frame)
         search_frame.pack(side=tk.LEFT, padx=20)
-        ttk.Label(search_frame, text="Search Shows:", font=('Helvetica', 16), foreground='#ffffff').pack(side=tk.LEFT)
+        ttk.Label(search_frame, text="Search Shows:", font=('Helvetica', 10), foreground='#ffffff').pack(side=tk.LEFT)
         self.filter_var = tk.StringVar()
-        self.filter_entry = ttk.Entry(search_frame, textvariable=self.filter_var, width=50, font=('Helvetica', 14))
+        self.filter_entry = ttk.Entry(search_frame, textvariable=self.filter_var, width=50, font=('Helvetica', 8))
         self.filter_entry.pack(side=tk.LEFT, padx=10)
         self.filter_var.trace('w', self.filter_shows)
-
-        ttk.Button(top_frame, text="Open Jellyfin", command=open_jellyfin_ui, style='primary.TButton').pack(side=tk.RIGHT, padx=10)
 
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill='both', expand=True)
 
         self.show_frames = []
         for i in range(5):
-            frame = ttk.Frame(main_frame, height=270, padding=5, style="DarkBlue.TFrame")
+            frame = ttk.Frame(main_frame, height=180, padding=5, style="DarkBlue.TFrame")
             frame.pack(fill='x', pady=2)
             frame.pack_propagate(False)
             self.show_frames.append(frame)
@@ -132,12 +138,12 @@ class WhatsonUI:
                                         foreground=scheme["desc"], style="DarkBlue.TLabel")
                 channel_logo.pack(side=tk.LEFT, padx=2)
 
-            img = get_image(show, width=462, height=260, image_type='Thumb')
+            img = get_image(show, width=320, height=180, image_type='Thumb')
             img_label = ttk.Label(frame, image=img)
             img_label.image = img
             img_label.pack(side=tk.LEFT, padx=2)
 
-            description_frame = ttk.Frame(frame, width=772, style="DarkBlue.TFrame")
+            description_frame = ttk.Frame(frame, width=720, style="DarkBlue.TFrame")  # Reduced width to 600
             description_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=2)
             description_frame.pack_propagate(False)
 
@@ -163,7 +169,7 @@ class WhatsonUI:
             desc_text.pack(expand=True, fill='both')
 
             desc_text.tag_configure("series_name", 
-                                    font=(desc_font_family, desc_font_size, "underline"),
+                                    font=(desc_font_family, series_font_size, "underline"),
                                     foreground=scheme["series"],
                                     spacing1=5,
                                     spacing3=0)
@@ -194,14 +200,14 @@ class WhatsonUI:
                                     spacing3=0)
 
             if episode_title:
-                parts = episode_title.split(" Episode ", 1)  # Split on one space before "Episode"
+                parts = episode_title.split(" Episode ", 1)
                 if len(parts) == 2:
-                    series_part = parts[0]  # Already uppercase, e.g., "NCIS: NEW ORLEANS"
-                    episode_part = parts[1]  # "1.01: Musician Heal Thyself"
+                    series_part = parts[0]
+                    episode_part = parts[1]
                     episode_subparts = episode_part.split(": ", 1)
                     if len(episode_subparts) == 2:
-                        episode_prefix = f"Episode {episode_subparts[0]}"  # "Episode 1.01"
-                        episode_name = episode_subparts[1]  # "Musician Heal Thyself"
+                        episode_prefix = f"Episode {episode_subparts[0]}"
+                        episode_name = episode_subparts[1]
                     else:
                         episode_prefix = f"Episode {episode_part}"
                         episode_name = ""
@@ -223,7 +229,7 @@ class WhatsonUI:
                     desc_text.insert(tk.END, description, "description")
             else:
                 desc_text.insert(tk.END, show_title.upper(), "series_name")
-                desc_text.insert(tk.END, " ", "spacer")  # Single space, no hyphen
+                desc_text.insert(tk.END, " ", "spacer")
                 desc_part = description
                 if description.startswith(show_title.upper() + " "):
                     desc_part = description[len(show_title.upper()) + 1:]
@@ -233,9 +239,7 @@ class WhatsonUI:
             desc_text.tag_add("center", "1.0", "end")
             desc_text.configure(state='disabled')
 
-            # Rest of the code (cast_frame, poster_frame) remains unchanged...
-
-            cast_frame = ttk.Frame(frame, width=700, style="DarkBlue.TFrame")
+            cast_frame = ttk.Frame(frame, width=480, style="DarkBlue.TFrame")  # Increased width to 600
             cast_frame.pack(side=tk.LEFT, fill='y', padx=0)
             cast_frame.pack_propagate(False)
             cast_container = ttk.Frame(cast_frame)
@@ -243,7 +247,7 @@ class WhatsonUI:
 
             people = show.get('People', [])
             for person in people[:5]:
-                cast_photo = get_cast_image(person, width=132, height=200)
+                cast_photo = get_cast_image(person, width=123, height=130)
                 cast_member_frame = ttk.Frame(cast_container)
                 cast_member_frame.pack(side=tk.LEFT, padx=2)
                 cast_label = ttk.Label(cast_member_frame, image=cast_photo)
@@ -274,16 +278,25 @@ class WhatsonUI:
                 )
                 name_label.pack(side=tk.TOP, pady=(0, 0))
 
-            poster_frame = ttk.Frame(frame, width=180, style="DarkBlue.TFrame")
+            poster_frame = ttk.Frame(frame, width=125, style="DarkBlue.TFrame")
             poster_frame.pack(side=tk.RIGHT, fill='y', padx=2)
             poster_frame.pack_propagate(False)
             poster_container = ttk.Frame(poster_frame)
             poster_container.pack(expand=True)
-            poster_img = get_image(show, width=180, height=270, image_type='Primary')
+            poster_img = get_image(show, width=125, height=180, image_type='Primary')
             poster_label = ttk.Label(poster_container, image=poster_img)
             poster_label.image = poster_img
             poster_label.pack()
             poster_label.bind("<Button-1>", lambda e, id=show['Id']: launch_show(id))
+
+    def filter_shows(self, *args):
+        filter_text = self.filter_var.get().lower()
+        self.filtered_shows = [
+            show for show in self.shows
+            if filter_text in show['Name'].lower() or
+               filter_text in (show.get('Genres', []) and ','.join(show['Genres']).lower())
+        ]
+        self.load_random_shows()
 
 if __name__ == "__main__":
     root = tb.Window(themename="cyborg")
