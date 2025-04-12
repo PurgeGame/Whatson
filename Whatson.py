@@ -51,16 +51,59 @@ class WhatsonUI:
             # Fetch and order the content list
             print("Fetching shows...")
             self.shows = fetch_all_items()
-            self.filtered_shows = self.shows[:]
 
             # Assign channels
             self.channel_assignments = {}
             for item in self.shows:
                 collections = get_collections_for_item(item['Id'], self.item_to_boxsets)
-                self.channel_assignments[item['Id']] = random.choice(collections)  # Randomly select a channel
+                # Separate non-"Random" channels
+                non_random_channels = [channel for channel in collections if channel != "Random"]
+                if non_random_channels:
+                    # Randomly select a non-"Random" channel if available
+                    selected_channel = random.choice(non_random_channels)
+                else:
+                    # Only "Random" is available, use it
+                    selected_channel = "Random"
+                self.channel_assignments[item['Id']] = selected_channel
+                print(f"Assigned channel for {item.get('Name', 'Unknown')} (ID: {item['Id']}): {selected_channel} from {collections}")
 
             # Order the content list (randomized order, max one channel per group of 5)
             self.ordered_shows = order_content(self.shows, self.channel_assignments)
+
+            # Post-process to ensure no more than one instance of a channel per 5 entries
+            # Group shows into chunks of 5
+            chunk_size = 5
+            for i in range(0, len(self.ordered_shows), chunk_size):
+                chunk = self.ordered_shows[i:i + chunk_size]
+                # Get the channels for this chunk
+                chunk_channels = [self.channel_assignments[show['Id']] for show in chunk]
+                # Count occurrences of each channel in the chunk
+                channel_counts = {}
+                for channel in chunk_channels:
+                    channel_counts[channel] = channel_counts.get(channel, 0) + 1
+                # Check for duplicates (excluding "Random")
+                duplicates = {channel: count for channel, count in channel_counts.items() if count > 1 and channel != "Random"}
+                if duplicates:
+                    print(f"Found duplicate channels in chunk {i//chunk_size}: {duplicates}")
+                    # For each duplicate channel, reassign one show to "Random" if possible
+                    for channel, count in duplicates.items():
+                        for j, show in enumerate(chunk):
+                            if self.channel_assignments[show['Id']] == channel and count > 1:
+                                # Check if the show has "Random" as an option
+                                collections = get_collections_for_item(show['Id'], self.item_to_boxsets)
+                                if "Random" in collections:
+                                    self.channel_assignments[show['Id']] = "Random"
+                                    print(f"Reassigned {show.get('Name', 'Unknown')} (ID: {show['Id']}) to Random to resolve duplicate {channel}")
+                                    count -= 1
+                    # Reorder the list after reassigning channels
+                    self.ordered_shows = order_content(self.shows, self.channel_assignments)
+
+            # Initialize filtered_shows as a copy of ordered_shows to respect the channel ordering
+            self.filtered_shows = self.ordered_shows[:]
+
+            # Initialize the current page
+            self.current_page = 0
+            self.shows_per_page = 5  # Number of shows displayed per page
 
             print("Setting up top frame...")
             top_frame = ttk.Frame(self.root, padding=5)
@@ -82,12 +125,46 @@ class WhatsonUI:
             search_frame.pack(side=tk.LEFT, padx=20)
             ttk.Label(search_frame, text="Search Shows:", font=('Helvetica', 10), foreground='#ffffff').pack(side=tk.LEFT)
             self.filter_var = tk.StringVar()
-            self.filter_entry = ttk.Entry(search_frame, textvariable=self.filter_var, width=50, font=('Helvetica', 8))
+            self.filter_entry = ttk.Entry(
+                search_frame,
+                textvariable=self.filter_var,
+                width=50,
+                font=('Helvetica', 12),
+                style="Large.TEntry"
+            )
             self.filter_entry.pack(side=tk.LEFT, padx=10)
             self.filter_var.trace('w', self.filter_shows)
 
+            # Add up and down arrow buttons to the right of the search bar
+            arrow_frame = ttk.Frame(top_frame)
+            arrow_frame.pack(side=tk.LEFT, padx=5)
+
+            # Up arrow button
+            up_button = ttk.Button(
+                arrow_frame,
+                text="▲",
+                command=self.scroll_up,
+                width=2,
+                style="Arrow.TButton"
+            )
+            up_button.pack(side=tk.LEFT, padx=2)
+
+            # Down arrow button
+            down_button = ttk.Button(
+                arrow_frame,
+                text="▼",
+                command=self.scroll_down,
+                width=2,
+                style="Arrow.TButton"
+            )
+            down_button.pack(side=tk.LEFT, padx=2)
+
             # Bind keypress event to focus the search bar
             self.root.bind('<KeyPress>', self.focus_search_bar)
+
+            # Bind up and down arrow keys for scrolling
+            self.root.bind('<Up>', self.scroll_up)
+            self.root.bind('<Down>', self.scroll_down)
 
             main_frame = ttk.Frame(self.root, padding=0)
             main_frame.pack(fill='both', expand=True, pady=0)
@@ -124,7 +201,23 @@ class WhatsonUI:
             if filter_text in show['Name'].lower() or
                filter_text in (show.get('Genres', []) and ','.join(show['Genres']).lower())
         ]
+        self.current_page = 0  # Reset to first page on filter
         self.load_ordered_shows()
+
+    def scroll_up(self, event=None):
+        """Scroll to the previous page of shows."""
+        if self.current_page > 0:
+            self.current_page -= 1
+            print(f"Scrolled up to page {self.current_page}")
+            self.load_ordered_shows()
+
+    def scroll_down(self, event=None):
+        """Scroll to the next page of shows."""
+        total_pages = (len(self.filtered_shows) + self.shows_per_page - 1) // self.shows_per_page
+        if self.current_page < total_pages - 1:
+            self.current_page += 1
+            print(f"Scrolled down to page {self.current_page}")
+            self.load_ordered_shows()
 
     def clear_frames(self):
         for frame in self.show_frames:
@@ -135,12 +228,14 @@ class WhatsonUI:
         try:
             self.clear_frames()
 
-            # Take the first 5 shows from the ordered list, ensuring they have a name
+            # Take the shows for the current page
+            start_index = self.current_page * self.shows_per_page
+            end_index = start_index + self.shows_per_page
             valid_shows = [
                 show for show in self.filtered_shows
                 if show.get('Name') and show.get('Name').strip()
             ]
-            selected_shows = valid_shows[:5]
+            selected_shows = valid_shows[start_index:end_index]
             self.current_shows = selected_shows
 
             scheme = self.color_scheme
@@ -307,15 +402,15 @@ class WhatsonUI:
                 cast_frame.pack_propagate(False)
                 print(f"Packed cast_frame for {show.get('Name', 'Unknown')} with width=500")
                 cast_container = ttk.Frame(cast_frame)
-                cast_container.pack(side=tk.TOP, pady=0)
+                cast_container.pack(side=tk.TOP, pady=0, fill='y', expand=True)
                 print(f"Packed cast_container for {show.get('Name', 'Unknown')}")
 
                 people = show.get('People', [])
                 for i, person in enumerate(people[:5]):
-                    cast_photo = get_cast_image(person, width=90, height=140)
+                    cast_photo = get_cast_image(person, width=90, height=148)
                     print(f"Loaded cast photo for {person.get('Name', 'Unknown')} (slot {i+1}) in {show.get('Name', 'Unknown')}")
-                    cast_member_frame = ttk.Frame(cast_container,width=135)
-                    cast_member_frame.pack(side=tk.LEFT, padx=2)
+                    cast_member_frame = ttk.Frame(cast_container, width=135)
+                    cast_member_frame.pack(side=tk.LEFT, padx=2, fill='y', expand=True)
                     print(f"Packed cast_member_frame for slot {i+1} in {show.get('Name', 'Unknown')}")
                     cast_label = ttk.Label(cast_member_frame, image=cast_photo, style="Cast.TLabel")
                     cast_label.image = cast_photo
@@ -344,14 +439,14 @@ class WhatsonUI:
                         compound='text',
                         style="Cast.TLabel"
                     )
-                    name_label.pack(side=tk.TOP, pady=(0, 0))
+                    name_label.pack(side=tk.TOP, pady=(0, 0), fill='y', expand=True)
                     print(f"Set name label for {person.get('Name', 'Unknown')} in slot {i+1}")
                 # Add placeholders for remaining slots
                 for i in range(len(people), 5):
-                    cast_photo = ImageTk.PhotoImage(Image.new('RGB', (90, 140), color='#000000'))
+                    cast_photo = ImageTk.PhotoImage(Image.new('RGB', (90, 148), color='#000000'))
                     print(f"Using blank placeholder for cast slot {i+1} in {show.get('Name', 'Unknown')}")
-                    cast_member_frame = ttk.Frame(cast_container)
-                    cast_member_frame.pack(side=tk.LEFT, padx=2)
+                    cast_member_frame = ttk.Frame(cast_container, width=135)
+                    cast_member_frame.pack(side=tk.LEFT, padx=2, fill='y', expand=True)
                     print(f"Packed cast_member_frame for slot {i+1} (placeholder) in {show.get('Name', 'Unknown')}")
                     cast_label = ttk.Label(cast_member_frame, image=cast_photo, style="Cast.TLabel")
                     cast_label.image = cast_photo
@@ -367,7 +462,7 @@ class WhatsonUI:
                         compound='text',
                         style="Cast.TLabel"
                     )
-                    name_label.pack(side=tk.TOP, pady=(0, 0))
+                    name_label.pack(side=tk.TOP, pady=(0, 0), fill='y', expand=True)
                     print(f"Set blank name label for slot {i+1}")
 
                 poster_frame = ttk.Frame(frame, width=129, style="DarkBlue.TFrame")
@@ -409,6 +504,10 @@ if __name__ == "__main__":
         style.configure("DarkBlue.TLabel", background="#0A1A2F", foreground="#ffffff")
         # New style for cast labels with very dark grey background
         style.configure("Cast.TLabel", background="#333333", foreground="#ffffff")
+        # Style for arrow buttons (increased font size and padding)
+        style.configure("Arrow.TButton", font=('Helvetica', 24), foreground="#ffffff", background="#555555", padding=5)
+        # Style for search bar (increased height and padding)
+        style.configure("Large.TEntry", padding=10)
         app = WhatsonUI(root)
         print("Starting Tkinter main loop...")
         root.mainloop()
