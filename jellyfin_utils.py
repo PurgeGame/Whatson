@@ -6,6 +6,7 @@ import webbrowser
 import random
 import subprocess
 import os
+import tempfile  # Import tempfile for creating temporary files
 from screeninfo import get_monitors
 
 # Jellyfin setup
@@ -49,14 +50,41 @@ client.config.data['auth.token'] = credentials['AccessToken']  # Access token fr
 print("Client configuration after setup:", client.config.data)
 print("Credentials after setup:", client.auth.credentials.get())
 
-# Rest of the file remains unchanged
+def reauthenticate():
+    """Re-authenticate with Jellyfin if the token is invalid."""
+    global credentials, USER_ID
+    try:
+        print("Attempting to re-authenticate with Jellyfin...")
+        credentials = client.auth.login(JELLYFIN_URL, 'Vicki', 'mom')
+        if not credentials or 'User' not in credentials or 'AccessToken' not in credentials:
+            raise Exception("Failed to re-authenticate. Check server URL, username, and password.")
+        USER_ID = credentials['User']['Id']
+        client.config.data['auth.user-id'] = USER_ID
+        client.config.data['auth.token'] = credentials['AccessToken']
+        print("Successfully re-authenticated with Jellyfin.")
+    except Exception as e:
+        print(f"Error during re-authentication: {e}")
+        raise
+
 def get_shows():
     print("Fetching shows for user:", USER_ID)
-    response = client.jellyfin.user_items(params={
-        'Recursive': True,
-        'IncludeItemTypes': 'Series,Movie',
-        'Fields': 'Overview,PrimaryImageTag,UserData,People,Images,ImageTags'
-    })
+    try:
+        response = client.jellyfin.user_items(params={
+            'Recursive': True,
+            'IncludeItemTypes': 'Series,Movie',
+            'Fields': 'Overview,PrimaryImageTag,UserData,People,Images,ImageTags'
+        })
+    except Exception as e:
+        if '401' in str(e):
+            print("Authentication token invalid, attempting to re-authenticate...")
+            reauthenticate()
+            response = client.jellyfin.user_items(params={
+                'Recursive': True,
+                'IncludeItemTypes': 'Series,Movie',
+                'Fields': 'Overview,PrimaryImageTag,UserData,People,Images,ImageTags'
+            })
+        else:
+            raise e
     items = response['Items']
     print(f"Found {len(items)} shows and movies")
     for item in items[:3]:
@@ -82,7 +110,7 @@ def get_image(item, width=462, height=260, image_type='Thumb'):
             print(f"Failed to load {image_type} image for item {item_id}")
     return ImageTk.PhotoImage(Image.new('RGB', (width, height), color='#000000'))
 
-def get_cast_image(person, width=133, height=140):
+def get_cast_image(person, width=92, height=155):
     person_id = person.get('Id')
     if person_id and person.get('PrimaryImageTag'):
         cast_img_url = f"{JELLYFIN_URL}/Items/{person_id}/Images/Primary?tag={person['PrimaryImageTag']}&maxWidth={width}&maxHeight={height}"
@@ -91,8 +119,17 @@ def get_cast_image(person, width=133, height=140):
             response = requests.get(cast_img_url)
             response.raise_for_status()
             cast_img = Image.open(io.BytesIO(response.content))
-            print(f"Successfully loaded cast image for person {person_id}")
-            return ImageTk.PhotoImage(cast_img)
+            # Convert to RGB if the image has an alpha channel
+            if cast_img.mode == 'RGBA':
+                cast_img = cast_img.convert('RGB')
+            # Resize while maintaining aspect ratio
+            cast_img.thumbnail((width, height), Image.Resampling.LANCZOS)
+            # Create a new image with the exact dimensions
+            new_img = Image.new('RGB', (width, height), color='#000000')
+            offset = ((width - cast_img.width) // 2, (height - cast_img.height) // 2)
+            new_img.paste(cast_img, offset)
+            print(f"Successfully loaded and resized cast image for person {person_id} to {width}x{height}")
+            return ImageTk.PhotoImage(new_img)
         except (requests.RequestException, IOError) as e:
             print(f"Failed to load cast image for person {person_id}: {e}")
     else:
@@ -171,7 +208,15 @@ def get_media_url(item_id):
     print(f"Fetching media URL for item {item_id}")
     try:
         # Fetch the item to get its media sources
-        item = client.jellyfin.get_item(item_id)
+        try:
+            item = client.jellyfin.get_item(item_id)
+        except Exception as e:
+            if '401' in str(e):
+                print("Authentication token invalid, attempting to re-authenticate...")
+                reauthenticate()
+                item = client.jellyfin.get_item(item_id)
+            else:
+                raise e
         if 'MediaSources' not in item or not item['MediaSources']:
             print(f"No media sources found for item {item_id}")
             return None
@@ -269,7 +314,15 @@ def launch_show(item_id):
     print(f"Launching show with ID {item_id}")
     try:
         # Fetch item information to determine its type
-        item = client.jellyfin.get_item(item_id)
+        try:
+            item = client.jellyfin.get_item(item_id)
+        except Exception as e:
+            if '401' in str(e):
+                print("Authentication token invalid, attempting to re-authenticate...")
+                reauthenticate()
+                item = client.jellyfin.get_item(item_id)
+            else:
+                raise e
         item_type = item['Type']
         print(f"Item type: {item_type}")
 
@@ -287,18 +340,20 @@ def launch_show(item_id):
             if not next_episode or not remaining_episode_urls:
                 print(f"No episodes found to play for series {item_id}")
                 return
-            # Create a playlist file
-            playlist_path = "playlist.txt"
-            with open(playlist_path, "w") as f:
+            # Create a temporary playlist file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as temp_file:
+                playlist_path = temp_file.name
                 for url in remaining_episode_urls:
-                    f.write(f"{url}\n")
-            # Play the playlist
-            mpv_command.append(f"--playlist={playlist_path}")
-            print(f"Launching playlist with command: {mpv_command}")
-            subprocess.run(mpv_command, check=True)
-            # Clean up the playlist file
-            if os.path.exists(playlist_path):
-                os.remove(playlist_path)
+                    temp_file.write(f"{url}\n")
+            try:
+                # Play the playlist
+                mpv_command.append(f"--playlist={playlist_path}")
+                print(f"Launching playlist with command: {mpv_command}")
+                subprocess.run(mpv_command, check=True)
+            finally:
+                # Clean up the temporary playlist file
+                if os.path.exists(playlist_path):
+                    os.remove(playlist_path)
         else:
             # For episodes or movies, play directly
             media_url = get_media_url(item_id)
@@ -314,6 +369,7 @@ def launch_show(item_id):
         print("MPV not found. Please ensure MPV is installed on your system.")
     except Exception as e:
         print(f"Error launching show with ID {item_id}: {e}")
+        raise
 
 def open_jellyfin_ui():
     """Open the Jellyfin web interface in the default browser."""
