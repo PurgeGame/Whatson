@@ -6,7 +6,7 @@ import webbrowser
 import random
 import subprocess
 import os
-import tempfile  # Import tempfile for creating temporary files
+import tempfile
 from screeninfo import get_monitors
 
 # Jellyfin setup
@@ -329,8 +329,8 @@ def launch_show(item_id):
         # Determine the audio device
         audio_device = get_non_default_audio_device()
 
-        # Build the base MPV command with full-screen and debug options
-        mpv_command = ["mpv", "--fs", "--msg-level=all=debug"]
+        # Build the base MPV command with full-screen and reduced log level
+        mpv_command = ["mpv", "--fs", "--msg-level=all=info"]  # Changed from debug to info
         if audio_device:
             mpv_command.append(f"--audio-device={audio_device}")
 

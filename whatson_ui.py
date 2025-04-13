@@ -6,6 +6,9 @@ import ttkbootstrap as tb
 import os
 import subprocess
 import random
+import time
+import threading
+import webbrowser  # Added for opening the browser
 from jellyfin_apiclient_python import JellyfinClient
 
 from jellyfin_utils import get_image, launch_show, get_description, get_cast_image
@@ -34,25 +37,25 @@ class WhatsonUI:
         y = 0
         self.root.geometry(f"+{x}+{y}")
 
-        top_frame = ttk.Frame(self.root, padding=5)
-        top_frame.pack(fill='x', pady=5)
+        self.top_frame = ttk.Frame(self.root, padding=5)
+        self.top_frame.pack(fill='x', pady=5)
 
         try:
             logo_img = Image.open("path/to/logo.png")
             logo_img = logo_img.resize((40, 40), Image.Resampling.LANCZOS)
             self.logo = ImageTk.PhotoImage(logo_img)
-            ttk.Label(top_frame, image=self.logo).pack(side=tk.LEFT, padx=10)
+            ttk.Label(self.top_frame, image=self.logo).pack(side=tk.LEFT, padx=10)
         except:
-            ttk.Label(top_frame, text="[Logo]", font=('Helvetica', 14), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
+            ttk.Label(self.top_frame, text="[Logo]", font=('Helvetica', 14), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
 
-        ttk.Label(top_frame, text="Whatson", font=('Helvetica', 16, 'bold'), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
+        ttk.Label(self.top_frame, text="Whatson", font=('Helvetica', 16, 'bold'), foreground='#ffffff').pack(side=tk.LEFT, padx=10)
 
-        search_frame = ttk.Frame(top_frame)
-        search_frame.pack(side=tk.LEFT, padx=20)
-        ttk.Label(search_frame, text="Search Shows:", font=('Helvetica', 10), foreground='#ffffff').pack(side=tk.LEFT)
+        self.search_frame = ttk.Frame(self.top_frame)
+        self.search_frame.pack(side=tk.LEFT, padx=20)
+        ttk.Label(self.search_frame, text="Search Shows:", font=('Helvetica', 10), foreground='#ffffff').pack(side=tk.LEFT)
         self.filter_var = tk.StringVar()
         self.filter_entry = ttk.Entry(
-            search_frame,
+            self.search_frame,
             textvariable=self.filter_var,
             width=50,
             font=('Helvetica', 12),
@@ -63,7 +66,7 @@ class WhatsonUI:
 
         # Add a custom clear button
         clear_button = ttk.Button(
-            search_frame,
+            self.search_frame,
             text="✕",
             command=self.clear_search,
             width=2,
@@ -71,7 +74,7 @@ class WhatsonUI:
         )
         clear_button.pack(side=tk.LEFT, padx=(0, 10))
 
-        arrow_frame = ttk.Frame(top_frame)
+        arrow_frame = ttk.Frame(self.top_frame)
         arrow_frame.pack(side=tk.LEFT, padx=5)
 
         up_button = ttk.Button(
@@ -93,7 +96,7 @@ class WhatsonUI:
         down_button.pack(side=tk.LEFT, padx=2)
 
         stream_button = ttk.Button(
-            top_frame,
+            self.top_frame,
             text="KIRO 7 Stream",
             command=self.launch_kuro7_stream,
             style="Arrow.TButton"
@@ -133,6 +136,7 @@ class WhatsonUI:
                 server_id = creds['Servers'][0].get('Id')
             if not server_id:
                 raise Exception("Failed to connect to server. Server ID not found in server info or credentials.")
+        self.server_id = server_id  # Store server_id for use in web player URL
 
         credentials = self.client.auth.login(JELLYFIN_URL, 'Vicki', 'mom')
         if not credentials or 'User' not in credentials or 'AccessToken' not in credentials:
@@ -149,6 +153,8 @@ class WhatsonUI:
         self.menu_y = 0
         self.menu_width = 0
         self.menu_height = 0
+        self.loading_label = None  # Initialize the loading label as None
+        self.flashing = False  # Flag to control the flashing loop
 
     def focus_search_bar(self, event):
         if event.char and event.char.isprintable():
@@ -179,22 +185,78 @@ class WhatsonUI:
         for i in range(5):
             self.desc_widgets[i] = None
 
+    def show_loading_indicator(self):
+        """Hide the search bar and show a flashing 'LOADING' label in the center of the top frame."""
+        # Hide the search frame
+        if self.search_frame.winfo_exists():
+            self.search_frame.pack_forget()
+
+        # Create the "LOADING" label if it doesn't exist
+        if self.loading_label is None or not self.loading_label.winfo_exists():
+            self.loading_label = ttk.Label(
+                self.top_frame,
+                text="LOADING",
+                font=('Helvetica', 21, 'bold'),  # Updated font size to 21
+                foreground='#FFFF00'  # Yellow
+            )
+            self.loading_label.pack(side=tk.TOP, expand=True)
+
+        # Start flashing the label
+        self.flashing = True
+        def flash():
+            if not self.flashing or not self.loading_label.winfo_exists():
+                return
+            # Toggle visibility
+            if self.loading_label.winfo_viewable():
+                self.loading_label.pack_forget()
+            else:
+                self.loading_label.pack(side=tk.TOP, expand=True)
+            # Schedule the next toggle
+            self.root.after(500, flash)
+
+        flash()
+
+    def hide_loading_indicator(self):
+        """Stop flashing and hide the loading label."""
+        self.flashing = False
+        if self.loading_label and self.loading_label.winfo_exists():
+            self.loading_label.pack_forget()
+
     def launch_kuro7_stream(self):
-        """Launch the KIRO 7 video stream using MPV with the same settings as other channels."""
-        stream_url = "https://amg00327-coxmediagroup-kironow-ono-zkqw3.amagi.tv/playlist/amg00327-coxmediagroup-kironow-ono/390ed178-1753-11f0-b595-06caa58e52b6/89/640x360_1057680/index.m3u8"
-        try:
-            audio_device = self.get_non_default_audio_device()
-            mpv_command = ["mpv", "--fs", "--msg-level=all=debug"]
-            if audio_device:
-                mpv_command.append(f"--audio-device={audio_device}")
-            mpv_command.append(stream_url)
-            subprocess.run(mpv_command, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Error launching MPV for KIRO 7 stream: {e}")
-        except FileNotFoundError:
-            print("MPV not found. Please ensure MPV is installed on your system.")
-        except Exception as e:
-            print(f"Error launching KIRO 7 stream: {e}")
+        """Launch the KIRO 7 video stream, clear all rows, show loading indicator, and close the UI after a delay."""
+        # Show the loading indicator
+        self.show_loading_indicator()
+
+        # Clear content of all frames immediately
+        def update_ui():
+            for frame in self.show_frames:
+                if frame.winfo_exists():
+                    self.clear_frame_content(frame)
+
+        self.root.after(0, update_ui)  # Update UI immediately (delay = 0)
+
+        # Launch the stream in a separate thread
+        def start_mpv():
+            stream_url = "https://amg00327-coxmediagroup-kironow-ono-zkqw3.amagi.tv/playlist/amg00327-coxmediagroup-kironow-ono/390ed178-1753-11f0-b595-06caa58e52b6/89/640x360_1057680/index.m3u8"
+            try:
+                audio_device = self.get_non_default_audio_device()
+                mpv_command = ["mpv", "--fs", "--msg-level=all=info"]
+                if audio_device:
+                    mpv_command.append(f"--audio-device={audio_device}")
+                mpv_command.append(stream_url)
+                subprocess.run(mpv_command, check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Error launching MPV for KIRO 7 stream: {e}")
+            except FileNotFoundError:
+                print("MPV not found. Please ensure MPV is installed on your system.")
+            except Exception as e:
+                print(f"Error launching KIRO 7 stream: {e}")
+
+        # Start MPV in a separate thread
+        threading.Thread(target=start_mpv, daemon=True).start()
+
+        # After 4 seconds, close the main UI (changed from 5s to 4s)
+        self.root.after(4000, self.close_ui)
 
     def get_non_default_audio_device(self):
         try:
@@ -736,16 +798,107 @@ class WhatsonUI:
                 poster_label = ttk.Label(poster_container, image=poster_img)
                 poster_label.image = poster_img
                 poster_label.pack()
+                # Bind the poster image to open in Jellyfin web player
+                poster_label.bind("<Button-1>", lambda e, id=show_id: self.on_poster_click(id))
         except Exception as e:
             print(f"Error in load_ordered_shows: {e}")
             raise
 
+    def clear_frame_content(self, frame):
+        """Clear all content inside the frame without hiding the frame itself."""
+        if not frame.winfo_exists():
+            return
+        for widget in frame.winfo_children():
+            widget.destroy()
+
     def on_thumb_click(self, item_id):
-        selected_episode_id = self.selected_episodes.get(item_id)
-        if selected_episode_id:
-            launch_show(selected_episode_id)
-        else:
-            launch_show(item_id)
+        # Find the frame (row) corresponding to the selected show
+        selected_frame_index = None
+        for idx, sid in self.show_ids.items():
+            if sid == item_id:
+                selected_frame_index = idx
+                break
+
+        if selected_frame_index is None:
+            print(f"Could not find frame for show ID {item_id}")
+            return
+
+        # Show the loading indicator
+        self.show_loading_indicator()
+
+        # Clear content of all other frames immediately (delay set to 0)
+        def update_ui():
+            # Clear content of unselected rows
+            for idx, frame in enumerate(self.show_frames):
+                if idx != selected_frame_index and frame.winfo_exists():
+                    self.clear_frame_content(frame)
+
+        self.root.after(0, update_ui)  # Update UI immediately (delay = 0)
+
+        # Launch the show in a separate thread
+        def start_mpv():
+            try:
+                selected_episode_id = self.selected_episodes.get(item_id)
+                if selected_episode_id:
+                    launch_show(selected_episode_id)
+                else:
+                    launch_show(item_id)
+            except Exception as e:
+                print(f"Error launching show with ID {item_id}: {e}")
+
+        # Start MPV in a separate thread
+        threading.Thread(target=start_mpv, daemon=True).start()
+
+        # After 4 seconds, close the main UI (changed from 5s to 4s)
+        self.root.after(4000, self.close_ui)
+
+    def on_poster_click(self, item_id):
+        # Find the frame (row) corresponding to the selected show
+        selected_frame_index = None
+        for idx, sid in self.show_ids.items():
+            if sid == item_id:
+                selected_frame_index = idx
+                break
+
+        if selected_frame_index is None:
+            print(f"Could not find frame for show ID {item_id}")
+            return
+
+        # Show the loading indicator
+        self.show_loading_indicator()
+
+        # Clear content of all other frames immediately (delay set to 0)
+        def update_ui():
+            # Clear content of unselected rows
+            for idx, frame in enumerate(self.show_frames):
+                if idx != selected_frame_index and frame.winfo_exists():
+                    self.clear_frame_content(frame)
+
+        self.root.after(0, update_ui)  # Update UI immediately (delay = 0)
+
+        # Launch the show in Jellyfin web player in a separate thread
+        def open_in_browser():
+            try:
+                # Construct the Jellyfin web player URL
+                jellyfin_url = f"http://localhost:8096/web/index.html#!/details?id={item_id}&serverId={self.server_id}"
+                print(f"Opening Jellyfin web player for item {item_id}: {jellyfin_url}")
+                webbrowser.open(jellyfin_url)  # Opens in default browser with default audio device
+            except Exception as e:
+                print(f"Error opening Jellyfin web player for item {item_id}: {e}")
+
+        # Start browser in a separate thread
+        threading.Thread(target=open_in_browser, daemon=True).start()
+
+        # After 4 seconds, close the main UI (changed from 5s to 4s)
+        self.root.after(4000, self.close_ui)
+
+    def close_ui(self):
+        """Close the main UI while keeping MPV running."""
+        self.hide_loading_indicator()  # Stop flashing and hide the loading label
+        print("Closing main UI...")
+        self.root.quit()
+        self.root.destroy()
+        print("Main UI closed.")
 
     def get_channel_image(self, channel):
         img_path = os.path.join("Channels", f"{channel}.png")
